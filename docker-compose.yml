@@ -1,0 +1,24 @@
+version: '3'
+
+services:
+  app:
+    build: .
+    ports:
+      - "80:80"
+    depends_on:
+      - db
+    env_file:
+      - .env
+    networks:
+      - net
+    restart: always
+  db:
+    image: mariadb
+    env_file:
+      - .env
+    networks:
+      - net
+    restart: always
+
+networks:
+  net:
