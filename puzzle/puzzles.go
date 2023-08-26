@@ -2,86 +2,83 @@ package puzzle
 
 import (
 	"bufio"
-	"database/sql"
+	"context"
 	"fmt"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 )
 
-func Init(db *sql.DB) error {
-	_, err := db.Exec(`
-DROP TABLE IF EXISTS puzzles;
-CREATE TABLE puzzles(
-	id INTEGER PRIMARY KEY,
-	moves TEXT,
-	fen TEXT,
-	elo INTEGER,
-	npieces INTEGER
-);
-`)
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec("CREATE INDEX puzzles_id_elo_npieces ON puzzles(id, elo, npieces);")
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func Populate(db *sql.DB, filename string) error {
+func Populate(col *mongo.Collection, filename string) error {
 	f, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
 
-	const query = "INSERT INTO puzzles(moves, fen, elo, npieces) VALUES(?, ?, ?, ?);"
-	const BatchSize = 10000
-
-	stmt, err := tx.Prepare(query)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+	buff := []interface{}{}
 	i := 0
 	for scanner.Scan() {
+		i += 1
 		arr := strings.Split(scanner.Text(), ",")
+		if arr[3] == "Rating" {
+			continue
+		}
 		fen := arr[1]
 		moves := arr[2]
-		elo := arr[3]
-		npieces := 9
-		_, err = stmt.Exec(moves, fen, elo, npieces)
+		elo, err := strconv.Atoi(arr[3])
 		if err != nil {
 			return err
 		}
-		if i%BatchSize == 0 {
-			fmt.Printf("%d\r", i)
-			err = tx.Commit()
-			if err != nil {
-				return err
-			}
-			tx, err = db.Begin()
-			if err != nil {
-				return err
-			}
-			stmt.Close()
-			stmt, err = tx.Prepare(query)
-			if err != nil {
-				return err
-			}
-			defer stmt.Close()
+		npieces := 9
+		p := Puzzle{
+			Fen:     fen,
+			Moves:   moves,
+			Elo:     elo,
+			Npieces: npieces,
+			I:       i,
 		}
-		i += 1
+		buff = append(buff, p)
+		if len(buff) == 10000 {
+			_, err = col.InsertMany(context.Background(), buff)
+			if err != nil {
+				return err
+			}
+			buff = []interface{}{}
+		}
 	}
-	err = tx.Commit()
+	_, err = col.InsertMany(context.Background(), buff)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func RandomPuzzle(col *mongo.Collection, elo_min int, elo_max int) (Puzzle, error) {
+	var p Puzzle
+	err := col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
+	if err != nil {
+		return Puzzle{}, err
+	}
+	fmt.Println(p)
+	i := rand.Intn(p.I)
+	if i < p.I/2 {
+		query := bson.M{"i": bson.M{"$gte": i}, "elo": bson.M{"$gte": elo_min, "$lte": elo_max}}
+		err = col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": 1})).Decode(&p)
+		if err != nil {
+			return Puzzle{}, err
+		}
+	} else {
+		query := bson.M{"i": bson.M{"$lte": i}, "elo": bson.M{"$gte": elo_min, "$lte": elo_max}}
+		err = col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
+		if err != nil {
+			return Puzzle{}, err
+		}
+	}
+	return p, nil
 }
