@@ -98,7 +98,25 @@ func Shuffle() error {
 	return nil
 }
 
-func GetRandom(elo_min int, elo_max int) (Puzzle, error) {
+func Min(field string) (Puzzle, error) {
+	var p Puzzle
+	err := Col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{field: 1})).Decode(&p)
+	if err != nil {
+		return Puzzle{}, err
+	}
+	return p, nil
+}
+
+func Max(field string) (Puzzle, error) {
+	var p Puzzle
+	err := Col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{field: -1})).Decode(&p)
+	if err != nil {
+		return Puzzle{}, err
+	}
+	return p, nil
+}
+
+func GetRandom(eloMin, eloMax, npiecesMin, npiecesMax int) (Puzzle, error) {
 	var p Puzzle
 	err := Col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
 	if err != nil {
@@ -107,13 +125,13 @@ func GetRandom(elo_min int, elo_max int) (Puzzle, error) {
 	fmt.Println(p)
 	i := rand.Intn(p.I)
 	if i < p.I/2 {
-		query := bson.M{"i": bson.M{"$gte": i}, "elo": bson.M{"$gte": elo_min, "$lte": elo_max}}
+		query := bson.M{"i": bson.M{"$gte": i}, "elo": bson.M{"$gte": eloMin, "$lte": eloMax}, "npieces": bson.M{"$gte": npiecesMin, "$lte": npiecesMax}}
 		err = Col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": 1})).Decode(&p)
 		if err != nil {
 			return Puzzle{}, err
 		}
 	} else {
-		query := bson.M{"i": bson.M{"$lte": i}, "elo": bson.M{"$gte": elo_min, "$lte": elo_max}}
+		query := bson.M{"i": bson.M{"$lte": i}, "elo": bson.M{"$gte": eloMin, "$lte": eloMax}, "npieces": bson.M{"$gte": npiecesMin, "$lte": npiecesMax}}
 		err = Col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
 		if err != nil {
 			return Puzzle{}, err
