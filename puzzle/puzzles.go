@@ -1,42 +1,64 @@
 package puzzle
 
 import (
-	"bufio"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"io"
 	"math/rand"
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
-func Populate(col *mongo.Collection, filename string) error {
+func Populate(filename string) error {
 	f, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
+
+	r := csv.NewReader(f)
+
+	record, err := r.Read()
+	if err != nil {
+		return err
+	}
+	fields := map[string]int{}
+	for i, v := range record {
+		fields[strings.ToLower(v)] = i
+	}
 
 	buff := []interface{}{}
-	i := 0
-	for scanner.Scan() {
-		i += 1
-		arr := strings.Split(scanner.Text(), ",")
-		if arr[3] == "Rating" {
-			continue
+	for i := 0; ; i++ {
+		record, err := r.Read()
+		if err == io.EOF {
+			break
 		}
-		fen := arr[1]
-		moves := arr[2]
-		elo, err := strconv.Atoi(arr[3])
 		if err != nil {
 			return err
 		}
-		npieces := 9
+		fen := record[fields["fen"]]
+		moves := record[fields["moves"]]
+		elo, err := strconv.Atoi(record[fields["rating"]])
+		if err != nil {
+			return err
+		}
+		npieces := func() int {
+			n := 0
+			for _, c := range strings.Split(fen, " ")[0] {
+				if unicode.IsLetter(c) {
+					n++
+				}
+			}
+			return n
+		}()
 		p := Puzzle{
+			Id:      primitive.NewObjectID(),
 			Fen:     fen,
 			Moves:   moves,
 			Elo:     elo,
@@ -44,24 +66,41 @@ func Populate(col *mongo.Collection, filename string) error {
 			I:       i,
 		}
 		buff = append(buff, p)
-		if len(buff) == 10000 {
-			_, err = col.InsertMany(context.Background(), buff)
+		if len(buff) == 10_000 {
+			_, err = Col.InsertMany(context.Background(), buff)
 			if err != nil {
 				return err
 			}
 			buff = []interface{}{}
 		}
 	}
-	_, err = col.InsertMany(context.Background(), buff)
+	_, err = Col.InsertMany(context.Background(), buff)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func RandomPuzzle(col *mongo.Collection, elo_min int, elo_max int) (Puzzle, error) {
+func Shuffle() error {
 	var p Puzzle
-	err := col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
+	Col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
+	for i := 0; i < p.I; i++ {
+		i2 := rand.Intn(p.I)
+		var p1, p2 Puzzle
+		Col.FindOne(context.Background(), bson.M{"i": i}).Decode(&p1)
+		Col.FindOne(context.Background(), bson.M{"i": i2}).Decode(&p2)
+		Col.UpdateOne(context.Background(), bson.M{"_id": p1.Id}, bson.M{"$set": bson.M{"i": i2}})
+		Col.UpdateOne(context.Background(), bson.M{"_id": p2.Id}, bson.M{"$set": bson.M{"i": i}})
+		if i%1000 == 0 {
+			fmt.Printf("%d\r", i)
+		}
+	}
+	return nil
+}
+
+func GetRandom(elo_min int, elo_max int) (Puzzle, error) {
+	var p Puzzle
+	err := Col.FindOne(context.Background(), bson.M{}, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
 	if err != nil {
 		return Puzzle{}, err
 	}
@@ -69,13 +108,13 @@ func RandomPuzzle(col *mongo.Collection, elo_min int, elo_max int) (Puzzle, erro
 	i := rand.Intn(p.I)
 	if i < p.I/2 {
 		query := bson.M{"i": bson.M{"$gte": i}, "elo": bson.M{"$gte": elo_min, "$lte": elo_max}}
-		err = col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": 1})).Decode(&p)
+		err = Col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": 1})).Decode(&p)
 		if err != nil {
 			return Puzzle{}, err
 		}
 	} else {
 		query := bson.M{"i": bson.M{"$lte": i}, "elo": bson.M{"$gte": elo_min, "$lte": elo_max}}
-		err = col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
+		err = Col.FindOne(context.Background(), query, options.FindOne().SetSort(bson.M{"i": -1})).Decode(&p)
 		if err != nil {
 			return Puzzle{}, err
 		}
